@@ -35,6 +35,7 @@ import {
   verifyPassword,
   type AuthRequest,
 } from './auth.ts';
+import { sendTransactionalEmail } from './email.ts';
 import { extractDocumentContent } from './documentExtractor.ts';
 import { generateSourceVerifiedFlashcards, generateSourceVerifiedQuiz } from './geminiQuiz.ts';
 import {
@@ -50,6 +51,17 @@ const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024 },
 });
+
+function parsePositiveIntId(raw: unknown): number | null {
+  if (typeof raw === 'number') {
+    return Number.isInteger(raw) && raw > 0 ? raw : null;
+  }
+  if (typeof raw !== 'string') return null;
+  const trimmed = raw.trim();
+  if (!/^\d+$/.test(trimmed)) return null;
+  const parsed = Number(trimmed);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+}
 
 // Simple sliding-window rate limiter per IP
 const rateBuckets = new Map<string, number[]>();
@@ -174,12 +186,12 @@ export function registerRoutes(app: Express): void {
         res.status(400).json({ error: 'Please enter your full name (at least 2 characters).' });
         return;
       }
-      if (!email || typeof email !== 'string' || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      if (!email || typeof email !== 'string' || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
         res.status(400).json({ error: 'Please enter a valid email address.' });
         return;
       }
-      if (!password || typeof password !== 'string' || password.length < 6) {
-        res.status(400).json({ error: 'Password must be at least 6 characters long.' });
+      if (!password || typeof password !== 'string' || password.trim().length < 6) {
+        res.status(400).json({ error: 'Password must be at least 6 non-space characters long.' });
         return;
       }
 
@@ -210,10 +222,17 @@ export function registerRoutes(app: Express): void {
       const token = createSessionToken(created.id, created.uid);
       setSessionCookie(res, token, req);
 
+      const emailResult = await sendTransactionalEmail({
+        to: normalizedEmail,
+        subject: 'Verify your AI QUIZ MASTER account',
+        text: `Welcome ${created.name}! Your AI QUIZ MASTER email verification code is: ${verificationCode}`,
+      });
+
       res.status(201).json({
         user: sanitizeUser(created),
         sessionToken: token,
-        verificationCodePreview: verificationCode,
+        emailDelivered: emailResult.delivered,
+        ...(emailResult.delivered ? {} : { verificationCodePreview: verificationCode }),
       });
     } catch (err: unknown) {
       console.error('Signup error:', err);
@@ -225,14 +244,14 @@ export function registerRoutes(app: Express): void {
     try {
       await ensureAdminAccount();
       const { email, password } = req.body || {};
-      if (!email || !password) {
+      if (typeof email !== 'string' || !email.trim() || typeof password !== 'string' || !password) {
         res.status(400).json({ error: 'Email and password are required.' });
         return;
       }
 
-      const normalizedEmail = String(email).trim().toLowerCase();
+      const normalizedEmail = email.trim().toLowerCase();
       const rows = await db.select().from(users).where(eq(users.email, normalizedEmail)).limit(1);
-      if (rows.length === 0 || !verifyPassword(String(password), rows[0].passwordHash)) {
+      if (rows.length === 0 || !verifyPassword(password, rows[0].passwordHash)) {
         res.status(401).json({ error: 'Invalid email or password.' });
         return;
       }
@@ -310,6 +329,50 @@ export function registerRoutes(app: Express): void {
     }
   });
 
+  app.post('/api/auth/resend-verification', requireAuth, rateLimit(10, 60_000), async (req: AuthRequest, res) => {
+    try {
+      const userId = req.currentUser!.id;
+      const [row] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+      if (!row) {
+        res.status(404).json({ error: 'User not found.' });
+        return;
+      }
+      if (row.emailVerified) {
+        res.json({
+          alreadyVerified: true,
+          emailDelivered: false,
+          message: 'Your email address is already verified.',
+          user: sanitizeUser(row),
+        });
+        return;
+      }
+
+      const freshCode = String(crypto.randomInt(100000, 999999));
+      await db
+        .update(users)
+        .set({ verificationCode: freshCode, updatedAt: new Date() })
+        .where(eq(users.id, userId));
+
+      const emailResult = await sendTransactionalEmail({
+        to: row.email,
+        subject: 'Your AI QUIZ MASTER verification code',
+        text: `Hello ${row.name}, your new AI QUIZ MASTER email verification code is: ${freshCode}`,
+      });
+
+      res.json({
+        alreadyVerified: false,
+        emailDelivered: emailResult.delivered,
+        message: emailResult.delivered
+          ? `Verification code sent to ${row.email}.`
+          : 'New verification code generated. Enter it below to verify your email.',
+        ...(emailResult.delivered ? {} : { verificationCodePreview: freshCode }),
+      });
+    } catch (err) {
+      console.error('Resend verification error:', err);
+      res.status(500).json({ error: 'Failed to resend verification code.' });
+    }
+  });
+
   app.post('/api/auth/forgot-password', rateLimit(15, 60_000), async (req, res) => {
     try {
       const { email } = req.body || {};
@@ -332,9 +395,18 @@ export function registerRoutes(app: Express): void {
         .set({ resetToken, resetTokenExpiresAt: expiresAt, updatedAt: new Date() })
         .where(eq(users.id, row.id));
 
+      const emailResult = await sendTransactionalEmail({
+        to: row.email,
+        subject: 'Reset your AI QUIZ MASTER password',
+        text: `Hello ${row.name}, use this password reset code within 30 minutes: ${resetToken}`,
+      });
+
       res.json({
-        message: 'Password reset token generated. Enter it below to set a new password.',
-        resetTokenPreview: resetToken,
+        emailDelivered: emailResult.delivered,
+        message: emailResult.delivered
+          ? `Password reset instructions sent to ${row.email}.`
+          : 'Password reset token generated. Enter it below to set a new password.',
+        ...(emailResult.delivered ? {} : { resetTokenPreview: resetToken }),
       });
     } catch (err) {
       console.error('Forgot password error:', err);
@@ -435,7 +507,8 @@ export function registerRoutes(app: Express): void {
         updates.name = body.name.trim();
       }
       if (typeof body.avatarUrl === 'string' || body.avatarUrl === null) {
-        updates.avatarUrl = body.avatarUrl;
+        const cleanAvatar = typeof body.avatarUrl === 'string' ? body.avatarUrl.trim() : null;
+        updates.avatarUrl = cleanAvatar || null;
       }
       if (typeof body.language === 'string') {
         updates.language = body.language;
@@ -690,7 +763,7 @@ export function registerRoutes(app: Express): void {
   app.get('/api/documents/:id', requireAuth, async (req: AuthRequest, res) => {
     try {
       const userId = req.currentUser!.id;
-      const docId = Number(req.params.id);
+      const docId = parsePositiveIntId(req.params.id);
       if (!docId) {
         res.status(400).json({ error: 'Invalid document ID.' });
         return;
@@ -739,7 +812,11 @@ export function registerRoutes(app: Express): void {
   app.get('/api/documents/:id/file', requireAuth, async (req: AuthRequest, res) => {
     try {
       const userId = req.currentUser!.id;
-      const docId = Number(req.params.id);
+      const docId = parsePositiveIntId(req.params.id);
+      if (!docId) {
+        res.status(400).json({ error: 'Invalid document ID.' });
+        return;
+      }
       const [doc] = await db
         .select({
           fileName: documents.fileName,
@@ -768,7 +845,11 @@ export function registerRoutes(app: Express): void {
   app.patch('/api/documents/:id', requireAuth, async (req: AuthRequest, res) => {
     try {
       const userId = req.currentUser!.id;
-      const docId = Number(req.params.id);
+      const docId = parsePositiveIntId(req.params.id);
+      if (!docId) {
+        res.status(400).json({ error: 'Invalid document ID.' });
+        return;
+      }
       const { subjectName, folderName, title } = req.body || {};
 
       const [existing] = await db
@@ -802,7 +883,11 @@ export function registerRoutes(app: Express): void {
   app.delete('/api/documents/:id', requireAuth, async (req: AuthRequest, res) => {
     try {
       const userId = req.currentUser!.id;
-      const docId = Number(req.params.id);
+      const docId = parsePositiveIntId(req.params.id);
+      if (!docId) {
+        res.status(400).json({ error: 'Invalid document ID.' });
+        return;
+      }
       const deleted = await db
         .delete(documents)
         .where(and(eq(documents.id, docId), eq(documents.userId, userId)))
@@ -1220,7 +1305,11 @@ export function registerRoutes(app: Express): void {
   app.get('/api/quizzes/:id', requireAuth, async (req: AuthRequest, res) => {
     try {
       const userId = req.currentUser!.id;
-      const quizId = Number(req.params.id);
+      const quizId = parsePositiveIntId(req.params.id);
+      if (!quizId) {
+        res.status(400).json({ error: 'Invalid quiz ID.' });
+        return;
+      }
       const [quiz] = await db
         .select()
         .from(quizzes)
@@ -1263,7 +1352,11 @@ export function registerRoutes(app: Express): void {
   app.delete('/api/quizzes/:id', requireAuth, async (req: AuthRequest, res) => {
     try {
       const userId = req.currentUser!.id;
-      const quizId = Number(req.params.id);
+      const quizId = parsePositiveIntId(req.params.id);
+      if (!quizId) {
+        res.status(400).json({ error: 'Invalid quiz ID.' });
+        return;
+      }
       const deleted = await db
         .delete(quizzes)
         .where(and(eq(quizzes.id, quizId), eq(quizzes.userId, userId)))
@@ -1282,7 +1375,11 @@ export function registerRoutes(app: Express): void {
   app.post('/api/quizzes/:id/submit', requireAuth, async (req: AuthRequest, res) => {
     try {
       const userId = req.currentUser!.id;
-      const quizId = Number(req.params.id);
+      const quizId = parsePositiveIntId(req.params.id);
+      if (!quizId) {
+        res.status(400).json({ error: 'Invalid quiz ID.' });
+        return;
+      }
       const { responses = [], timeTakenSeconds = 0 } = req.body || {};
 
       const [quiz] = await db
@@ -1423,7 +1520,11 @@ export function registerRoutes(app: Express): void {
   app.get('/api/attempts/:id', requireAuth, async (req: AuthRequest, res) => {
     try {
       const userId = req.currentUser!.id;
-      const attemptId = Number(req.params.id);
+      const attemptId = parsePositiveIntId(req.params.id);
+      if (!attemptId) {
+        res.status(400).json({ error: 'Invalid attempt ID.' });
+        return;
+      }
       const [attempt] = await db
         .select()
         .from(quizAttempts)
@@ -1639,7 +1740,11 @@ export function registerRoutes(app: Express): void {
   app.patch('/api/questions/:id', requireAuth, async (req: AuthRequest, res) => {
     try {
       const userId = req.currentUser!.id;
-      const qId = Number(req.params.id);
+      const qId = parsePositiveIntId(req.params.id);
+      if (!qId) {
+        res.status(400).json({ error: 'Invalid question ID.' });
+        return;
+      }
       const body = req.body || {};
 
       const [existing] = await db
@@ -1656,9 +1761,15 @@ export function registerRoutes(app: Express): void {
       const [updated] = await db
         .update(questions)
         .set({
-          questionText: typeof body.questionText === 'string' ? body.questionText : existing.questionText,
+          questionText:
+            typeof body.questionText === 'string' && body.questionText.trim()
+              ? body.questionText.trim()
+              : existing.questionText,
           options: Array.isArray(body.options) ? body.options : existing.options,
-          correctAnswer: typeof body.correctAnswer === 'string' ? body.correctAnswer : existing.correctAnswer,
+          correctAnswer:
+            typeof body.correctAnswer === 'string' && body.correctAnswer.trim()
+              ? body.correctAnswer.trim()
+              : existing.correctAnswer,
           explanation: typeof body.explanation === 'string' ? body.explanation : existing.explanation,
           difficulty: typeof body.difficulty === 'string' ? body.difficulty : existing.difficulty,
           isBookmarked: typeof body.isBookmarked === 'boolean' ? body.isBookmarked : existing.isBookmarked,
@@ -1682,7 +1793,11 @@ export function registerRoutes(app: Express): void {
   app.post('/api/questions/:id/regenerate', requireAuth, async (req: AuthRequest, res) => {
     try {
       const userId = req.currentUser!.id;
-      const qId = Number(req.params.id);
+      const qId = parsePositiveIntId(req.params.id);
+      if (!qId) {
+        res.status(400).json({ error: 'Invalid question ID.' });
+        return;
+      }
       const [existing] = await db
         .select()
         .from(questions)
@@ -1761,8 +1876,19 @@ export function registerRoutes(app: Express): void {
   app.delete('/api/questions/:id', requireAuth, async (req: AuthRequest, res) => {
     try {
       const userId = req.currentUser!.id;
-      const qId = Number(req.params.id);
-      await db.delete(questions).where(and(eq(questions.id, qId), eq(questions.userId, userId)));
+      const qId = parsePositiveIntId(req.params.id);
+      if (!qId) {
+        res.status(400).json({ error: 'Invalid question ID.' });
+        return;
+      }
+      const deleted = await db
+        .delete(questions)
+        .where(and(eq(questions.id, qId), eq(questions.userId, userId)))
+        .returning({ id: questions.id });
+      if (deleted.length === 0) {
+        res.status(404).json({ error: 'Question not found.' });
+        return;
+      }
       res.json({ ok: true });
     } catch (err) {
       console.error('Delete question error:', err);
@@ -1878,7 +2004,11 @@ export function registerRoutes(app: Express): void {
   app.patch('/api/flashcards/:id', requireAuth, async (req: AuthRequest, res) => {
     try {
       const userId = req.currentUser!.id;
-      const cardId = Number(req.params.id);
+      const cardId = parsePositiveIntId(req.params.id);
+      if (!cardId) {
+        res.status(400).json({ error: 'Invalid flashcard ID.' });
+        return;
+      }
       const { difficultyRating, incrementReview } = req.body || {};
 
       const [existing] = await db
@@ -1914,8 +2044,19 @@ export function registerRoutes(app: Express): void {
   app.delete('/api/flashcards/:id', requireAuth, async (req: AuthRequest, res) => {
     try {
       const userId = req.currentUser!.id;
-      const cardId = Number(req.params.id);
-      await db.delete(flashcards).where(and(eq(flashcards.id, cardId), eq(flashcards.userId, userId)));
+      const cardId = parsePositiveIntId(req.params.id);
+      if (!cardId) {
+        res.status(400).json({ error: 'Invalid flashcard ID.' });
+        return;
+      }
+      const deleted = await db
+        .delete(flashcards)
+        .where(and(eq(flashcards.id, cardId), eq(flashcards.userId, userId)))
+        .returning({ id: flashcards.id });
+      if (deleted.length === 0) {
+        res.status(404).json({ error: 'Flashcard not found.' });
+        return;
+      }
       res.json({ ok: true });
     } catch (err) {
       console.error('Delete flashcard error:', err);
@@ -1943,7 +2084,7 @@ export function registerRoutes(app: Express): void {
     try {
       const userId = req.currentUser!.id;
       const { title, subjectName, chapterTitle, targetDate, targetQuestions, documentId } = req.body || {};
-      if (!title || !subjectName || !targetDate) {
+      if (!title || typeof title !== 'string' || !title.trim() || !subjectName || typeof subjectName !== 'string' || !subjectName.trim() || !targetDate || typeof targetDate !== 'string' || !targetDate.trim()) {
         res.status(400).json({ error: 'Title, subject, and target date are required.' });
         return;
       }
@@ -1952,15 +2093,35 @@ export function registerRoutes(app: Express): void {
         res.status(400).json({ error: 'Number of questions must be a whole number between 1 and 200.' });
         return;
       }
+
+      let verifiedDocId: number | null = null;
+      if (documentId !== undefined && documentId !== null && String(documentId).trim() !== '') {
+        const parsedDocId = parsePositiveIntId(documentId);
+        if (!parsedDocId) {
+          res.status(400).json({ error: 'Invalid document ID.' });
+          return;
+        }
+        const [ownedDoc] = await db
+          .select({ id: documents.id })
+          .from(documents)
+          .where(and(eq(documents.id, parsedDocId), eq(documents.userId, userId)))
+          .limit(1);
+        if (!ownedDoc) {
+          res.status(404).json({ error: 'Linked study document not found in your account.' });
+          return;
+        }
+        verifiedDocId = ownedDoc.id;
+      }
+
       const [created] = await db
         .insert(studyPlans)
         .values({
           userId,
-          documentId: documentId ? Number(documentId) : null,
-          title: String(title).trim(),
-          subjectName: String(subjectName).trim(),
+          documentId: verifiedDocId,
+          title: title.trim(),
+          subjectName: subjectName.trim(),
           chapterTitle: String(chapterTitle || 'All Chapters').trim(),
-          targetDate: String(targetDate),
+          targetDate: targetDate.trim(),
           targetQuestions: enforcedQuestions,
         })
         .returning();
@@ -1981,8 +2142,19 @@ export function registerRoutes(app: Express): void {
   app.delete('/api/study-plans/:id', requireAuth, async (req: AuthRequest, res) => {
     try {
       const userId = req.currentUser!.id;
-      const planId = Number(req.params.id);
-      await db.delete(studyPlans).where(and(eq(studyPlans.id, planId), eq(studyPlans.userId, userId)));
+      const planId = parsePositiveIntId(req.params.id);
+      if (!planId) {
+        res.status(400).json({ error: 'Invalid study plan ID.' });
+        return;
+      }
+      const deleted = await db
+        .delete(studyPlans)
+        .where(and(eq(studyPlans.id, planId), eq(studyPlans.userId, userId)))
+        .returning({ id: studyPlans.id });
+      if (deleted.length === 0) {
+        res.status(404).json({ error: 'Study plan not found.' });
+        return;
+      }
       res.json({ ok: true });
     } catch (err) {
       console.error('Delete study plan error:', err);
@@ -2032,6 +2204,21 @@ export function registerRoutes(app: Express): void {
         .where(eq(systemConfig.key, 'plans_and_features'))
         .limit(1);
 
+      const rawCfg = (cfg?.value as Record<string, unknown>) || DEFAULT_PLANS_CONFIG;
+      const rawFeatures = (rawCfg.features as Record<string, unknown>) || {};
+      const normalizedConfig = {
+        plans: Array.isArray(rawCfg.plans) ? rawCfg.plans : DEFAULT_PLANS_CONFIG.plans,
+        features: {
+          ...rawFeatures,
+          ocrFallbackEnabled: Boolean(
+            rawFeatures.ocrFallbackEnabled ?? rawFeatures.ocrEnabled ?? true
+          ),
+          strictSourceVerification: Boolean(
+            rawFeatures.strictSourceVerification ?? true
+          ),
+        },
+      };
+
       res.json({
         users: allUsers.map((u) => ({
           ...u,
@@ -2040,7 +2227,7 @@ export function registerRoutes(app: Express): void {
         documentStats: docStats[0] || { totalDocuments: 0, totalPages: 0 },
         usageStats: usageStats[0] || { totalActions: 0, totalTokens: 0 },
         errorLogs: recentLogs,
-        config: cfg?.value || DEFAULT_PLANS_CONFIG,
+        config: normalizedConfig,
       });
     } catch (err) {
       console.error('Admin overview error:', err);
@@ -2048,10 +2235,28 @@ export function registerRoutes(app: Express): void {
     }
   });
 
-  app.patch('/api/admin/users/:id', requireAuth, requireAdmin, async (req, res) => {
+  app.patch('/api/admin/users/:id', requireAuth, requireAdmin, async (req: AuthRequest, res) => {
     try {
-      const targetId = Number(req.params.id);
+      const targetId = parsePositiveIntId(req.params.id);
+      if (!targetId) {
+        res.status(400).json({ error: 'Invalid user ID.' });
+        return;
+      }
+      const [targetUser] = await db
+        .select({ id: users.id })
+        .from(users)
+        .where(eq(users.id, targetId))
+        .limit(1);
+      if (!targetUser) {
+        res.status(404).json({ error: 'User not found.' });
+        return;
+      }
+
       const { role, plan } = req.body || {};
+      if (targetId === req.currentUser!.id && role === 'student') {
+        res.status(400).json({ error: 'You cannot demote your own administrator account.' });
+        return;
+      }
       if (role === 'student' || role === 'admin') {
         await db.update(users).set({ role, updatedAt: new Date() }).where(eq(users.id, targetId));
       }

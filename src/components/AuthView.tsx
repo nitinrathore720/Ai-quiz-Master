@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
-import { signInWithPopup } from 'firebase/auth';
+import { signInWithPopup, signInWithRedirect, signOut } from 'firebase/auth';
 import { ArrowLeft, Eye, EyeOff, KeyRound, Loader2, Mail, ShieldCheck, User } from 'lucide-react';
 import { auth, googleAuthProvider } from '../lib/firebase';
 import { apiFetch, setClientSessionToken } from '../lib/api';
+import { formatFirebaseAuthError, shouldFallbackToRedirect } from '../utils/authHelpers';
 import { BrandLogo } from './BrandLogo';
 import type { UserProfile } from '../types';
 
@@ -34,13 +35,15 @@ export const AuthView: React.FC<AuthViewProps> = ({
     setNotice(null);
     setLoading(true);
     try {
+      await signOut(auth).catch(() => undefined);
+      setClientSessionToken(null);
       const res = await apiFetch<{
         user: UserProfile;
         sessionToken?: string;
         verificationCodePreview?: string;
       }>('/api/auth/signup', {
         method: 'POST',
-        body: JSON.stringify({ name, email, password }),
+        body: JSON.stringify({ name: name.trim(), email: email.trim(), password }),
       });
       if (res.sessionToken) setClientSessionToken(res.sessionToken);
       onSuccess(res.user, res.verificationCodePreview);
@@ -57,9 +60,11 @@ export const AuthView: React.FC<AuthViewProps> = ({
     setNotice(null);
     setLoading(true);
     try {
+      await signOut(auth).catch(() => undefined);
+      setClientSessionToken(null);
       const res = await apiFetch<{ user: UserProfile; sessionToken?: string }>('/api/auth/login', {
         method: 'POST',
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ email: email.trim(), password }),
       });
       if (res.sessionToken) setClientSessionToken(res.sessionToken);
       onSuccess(res.user);
@@ -72,8 +77,10 @@ export const AuthView: React.FC<AuthViewProps> = ({
 
   const handleGoogleSignIn = async () => {
     setError(null);
+    setNotice(null);
     setLoading(true);
     try {
+      setClientSessionToken(null);
       const cred = await signInWithPopup(auth, googleAuthProvider);
       const idToken = await cred.user.getIdToken();
       const res = await apiFetch<{ user: UserProfile; sessionToken?: string }>('/api/auth/firebase', {
@@ -84,7 +91,16 @@ export const AuthView: React.FC<AuthViewProps> = ({
       if (res.sessionToken) setClientSessionToken(res.sessionToken);
       onSuccess(res.user);
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Google Sign-In could not be completed.');
+      if (shouldFallbackToRedirect(err)) {
+        try {
+          await signInWithRedirect(auth, googleAuthProvider);
+          return;
+        } catch (redirectErr: unknown) {
+          setError(formatFirebaseAuthError(redirectErr, window.location.host));
+        }
+      } else {
+        setError(formatFirebaseAuthError(err, window.location.host));
+      }
     } finally {
       setLoading(false);
     }
@@ -94,6 +110,8 @@ export const AuthView: React.FC<AuthViewProps> = ({
     setError(null);
     setLoading(true);
     try {
+      await signOut(auth).catch(() => undefined);
+      setClientSessionToken(null);
       const res = await apiFetch<{ user: UserProfile; sessionToken?: string }>('/api/auth/demo', {
         method: 'POST',
       });

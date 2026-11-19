@@ -317,7 +317,9 @@ export const ResultAnalysisView: React.FC<ResultAnalysisViewProps> = ({
         <h3 className="font-display text-lg font-bold">
           {filterMode === 'wrong' ? 'Questions Needing Revision' : 'Detailed Answer Review'}
         </h3>
-        {displayedQuestions.map((q, idx) => {
+        {displayedQuestions.map((q) => {
+          const originalIndex = questions.findIndex((orig) => orig.id === q.id);
+          const qNum = originalIndex >= 0 ? originalIndex + 1 : 1;
           const resp = respMap.get(q.id);
           const isCorrect = Boolean(resp?.isCorrect);
           return (
@@ -327,12 +329,12 @@ export const ResultAnalysisView: React.FC<ResultAnalysisViewProps> = ({
                   {isCorrect ? (
                     <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
                       <CheckCircle2 className="w-4 h-4" />
-                      Question {idx + 1} · Correct
+                      Question {qNum} · Correct
                     </span>
                   ) : (
                     <span className="inline-flex items-center gap-1 text-red-600 dark:text-red-400">
                       <XCircle className="w-4 h-4" />
-                      Question {idx + 1} · Needs Revision
+                      Question {qNum} · Needs Revision
                     </span>
                   )}
                 </div>

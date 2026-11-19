@@ -230,11 +230,14 @@ export const AdminView: React.FC = () => {
             <label className="inline-flex items-center gap-2 cursor-pointer">
               <input
                 type="checkbox"
-                checked={config.features?.ocrFallbackEnabled}
+                checked={Boolean(config.features?.ocrFallbackEnabled)}
                 onChange={(e) =>
                   setConfig({
                     ...config,
-                    features: { ...config.features, ocrFallbackEnabled: e.target.checked },
+                    features: {
+                      strictSourceVerification: Boolean(config.features?.strictSourceVerification),
+                      ocrFallbackEnabled: e.target.checked,
+                    },
                   })
                 }
               />
@@ -243,11 +246,14 @@ export const AdminView: React.FC = () => {
             <label className="inline-flex items-center gap-2 cursor-pointer">
               <input
                 type="checkbox"
-                checked={config.features?.strictSourceVerification}
+                checked={Boolean(config.features?.strictSourceVerification)}
                 onChange={(e) =>
                   setConfig({
                     ...config,
-                    features: { ...config.features, strictSourceVerification: e.target.checked },
+                    features: {
+                      ocrFallbackEnabled: Boolean(config.features?.ocrFallbackEnabled),
+                      strictSourceVerification: e.target.checked,
+                    },
                   })
                 }
               />
@@ -263,10 +269,11 @@ export const AdminView: React.FC = () => {
                   Max Documents
                   <input
                     type="number"
+                    min={1}
                     value={plan.maxDocuments}
                     onChange={(e) => {
                       const next = [...config.plans];
-                      next[idx] = { ...plan, maxDocuments: Number(e.target.value) || 1 };
+                      next[idx] = { ...plan, maxDocuments: Math.max(1, Number(e.target.value) || 1) };
                       setConfig({ ...config, plans: next });
                     }}
                     className="mt-1 w-full px-2.5 py-1.5 rounded-lg bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 text-xs tabular-nums"
@@ -276,10 +283,11 @@ export const AdminView: React.FC = () => {
                   Max Quizzes / Month
                   <input
                     type="number"
+                    min={1}
                     value={plan.maxQuizzesPerMonth}
                     onChange={(e) => {
                       const next = [...config.plans];
-                      next[idx] = { ...plan, maxQuizzesPerMonth: Number(e.target.value) || 1 };
+                      next[idx] = { ...plan, maxQuizzesPerMonth: Math.max(1, Number(e.target.value) || 1) };
                       setConfig({ ...config, plans: next });
                     }}
                     className="mt-1 w-full px-2.5 py-1.5 rounded-lg bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 text-xs tabular-nums"

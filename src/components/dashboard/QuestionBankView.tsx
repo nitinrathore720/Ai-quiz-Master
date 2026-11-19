@@ -124,13 +124,19 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
   };
 
   const handleSaveEdit = async (qId: number) => {
+    const cleanText = editQuestionText.trim();
+    if (!cleanText) {
+      setError('Question text cannot be empty.');
+      return;
+    }
     setBusyId(qId);
+    setError(null);
     try {
       const res = await apiFetch<{ question: QuestionItem }>(`/api/questions/${qId}`, {
         method: 'PATCH',
         body: JSON.stringify({
-          questionText: editQuestionText,
-          explanation: editExplanation,
+          questionText: cleanText,
+          explanation: editExplanation.trim(),
           bookmarkNote: editNote,
         }),
       });

@@ -41,8 +41,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [privacyHideLeaderboard, setPrivacyHideLeaderboard] = useState(Boolean(user.privacyHideLeaderboard));
 
   const [savingProfile, setSavingProfile] = useState(false);
+  const [livePreviewCode, setLivePreviewCode] = useState<string | null>(verificationPreview || null);
   const [verifyCode, setVerifyCode] = useState(verificationPreview || '');
   const [verifyingEmail, setVerifyingEmail] = useState(false);
+  const [resendingCode, setResendingCode] = useState(false);
 
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -56,6 +58,18 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setName(user.name);
+    setAvatarUrl(user.avatarUrl || '/src/assets/images/student_avatar_default_1795015261884.jpg');
+    setLanguage(user.language || 'English');
+    setTheme(user.theme || 'dark');
+    setReducedMotion(Boolean(user.reducedMotion));
+    setDailyGoalMinutes(user.dailyGoalMinutes || 30);
+    setDailyGoalQuestions(user.dailyGoalQuestions || 15);
+    setNotificationsEnabled(Boolean(user.notificationsEnabled));
+    setPrivacyHideLeaderboard(Boolean(user.privacyHideLeaderboard));
+  }, [user]);
 
   useEffect(() => {
     apiFetch<{ plans: PlanConfig[]; paymentConfigured: boolean }>('/api/plans')
@@ -72,18 +86,22 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     e.preventDefault();
     setError(null);
     setMessage(null);
+    if (name.trim().length < 2) {
+      setError('Full name must be at least 2 characters.');
+      return;
+    }
     setSavingProfile(true);
     try {
       const res = await apiFetch<{ user: UserProfile }>('/api/auth/profile', {
         method: 'PATCH',
         body: JSON.stringify({
-          name,
-          avatarUrl,
+          name: name.trim(),
+          avatarUrl: avatarUrl.trim() || null,
           language,
           theme,
           reducedMotion,
-          dailyGoalMinutes,
-          dailyGoalQuestions,
+          dailyGoalMinutes: Math.min(480, Math.max(5, Number(dailyGoalMinutes) || 30)),
+          dailyGoalQuestions: Math.min(200, Math.max(1, Number(dailyGoalQuestions) || 15)),
           notificationsEnabled,
           privacyHideLeaderboard,
         }),
@@ -113,6 +131,34 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       setError(err instanceof Error ? err.message : 'Verification code invalid.');
     } finally {
       setVerifyingEmail(false);
+    }
+  };
+
+  const handleResendVerification = async () => {
+    setError(null);
+    setMessage(null);
+    setResendingCode(true);
+    try {
+      const res = await apiFetch<{
+        alreadyVerified?: boolean;
+        message: string;
+        verificationCodePreview?: string;
+        user?: UserProfile;
+      }>('/api/auth/resend-verification', {
+        method: 'POST',
+      });
+      if (res.alreadyVerified && res.user) {
+        onUserUpdated(res.user);
+      }
+      if (res.verificationCodePreview) {
+        setLivePreviewCode(res.verificationCodePreview);
+        setVerifyCode(res.verificationCodePreview);
+      }
+      setMessage(res.message);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to resend verification code.');
+    } finally {
+      setResendingCode(false);
     }
   };
 
@@ -176,9 +222,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           </div>
           <p className="text-xs text-slate-600 dark:text-slate-300">
             Enter your 6-digit verification code to confirm your account.
-            {verificationPreview && (
+            {livePreviewCode && (
               <span className="font-mono font-bold text-blue-500 ml-1">
-                Code: {verificationPreview}
+                Code: {livePreviewCode}
               </span>
             )}
           </p>
@@ -198,6 +244,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             >
               {verifyingEmail ? 'Verifying...' : 'Verify Email'}
             </button>
+            <button
+              type="button"
+              disabled={resendingCode}
+              onClick={handleResendVerification}
+              className="px-4 py-2 rounded-xl border border-slate-300 dark:border-slate-700 hover:border-blue-500 text-sm font-semibold cursor-pointer"
+            >
+              {resendingCode ? 'Sending...' : 'Resend Code'}
+            </button>
           </div>
         </form>
       )}
@@ -206,7 +260,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       <form onSubmit={handleSaveProfile} className="glass-surface rounded-2xl p-6 space-y-5">
         <div className="flex items-center gap-3 border-b border-slate-200 dark:border-slate-800 pb-4">
           <img
-            src={avatarUrl}
+            src={avatarUrl.trim() || '/src/assets/images/student_avatar_default_1795015261884.jpg'}
             alt={`${user.name} profile avatar`}
             className="w-12 h-12 rounded-full object-cover border border-slate-300 dark:border-slate-700"
             referrerPolicy="no-referrer"

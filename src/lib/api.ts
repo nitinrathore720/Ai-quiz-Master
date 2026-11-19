@@ -32,21 +32,21 @@ export function getClientSessionToken(): string | null {
 
 export async function getAuthHeaders(): Promise<Record<string, string>> {
   const headers: Record<string, string> = {};
+  const sessionToken = getClientSessionToken();
+  if (sessionToken) {
+    headers['Authorization'] = `Bearer ${sessionToken}`;
+    return headers;
+  }
   const user = auth.currentUser;
   if (user) {
     try {
       const token = await user.getIdToken();
       if (token) {
         headers['Authorization'] = `Bearer ${token}`;
-        return headers;
       }
     } catch {
-      // Fallback to local session token / cookie
+      // Ignore Firebase token fallback error when unauthenticated
     }
-  }
-  const sessionToken = getClientSessionToken();
-  if (sessionToken) {
-    headers['Authorization'] = `Bearer ${sessionToken}`;
   }
   return headers;
 }

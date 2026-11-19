@@ -192,6 +192,11 @@ export const QuizPlayerView: React.FC<QuizPlayerViewProps> = ({
     [elapsedSeconds, questions, answers, reviewFlags, quizId, draftKey, onCompleted]
   );
 
+  const handleSubmitRef = useRef(handleSubmit);
+  useEffect(() => {
+    handleSubmitRef.current = handleSubmit;
+  }, [handleSubmit]);
+
   useEffect(() => {
     if (!quiz || loading) return;
     const interval = window.setInterval(() => {
@@ -200,7 +205,7 @@ export const QuizPlayerView: React.FC<QuizPlayerViewProps> = ({
         if (prev === null) return null;
         if (prev <= 1) {
           if (!submittedRef.current) {
-            handleSubmit(true);
+            handleSubmitRef.current(true);
           }
           return 0;
         }
@@ -208,7 +213,7 @@ export const QuizPlayerView: React.FC<QuizPlayerViewProps> = ({
       });
     }, 1000);
     return () => window.clearInterval(interval);
-  }, [quiz, loading, handleSubmit]);
+  }, [quiz, loading]);
 
   const currentQuestion = questions[currentIndex];
 
@@ -242,6 +247,7 @@ export const QuizPlayerView: React.FC<QuizPlayerViewProps> = ({
     setClueVisibleMap({});
     setCurrentIndex(0);
     setElapsedSeconds(0);
+    setRemainingSeconds(quiz && quiz.timeLimitSeconds > 0 ? quiz.timeLimitSeconds : null);
     setRestoredDraft(false);
     try {
       localStorage.removeItem(draftKey);

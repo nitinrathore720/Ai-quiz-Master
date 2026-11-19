@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { signOut } from 'firebase/auth';
+import { getRedirectResult, signOut } from 'firebase/auth';
 import { Loader2 } from 'lucide-react';
 import { apiFetch, setClientSessionToken } from './lib/api';
 import { auth } from './lib/firebase';
@@ -32,13 +32,35 @@ export default function App() {
     const params = new URLSearchParams(window.location.search);
     const autoStart = params.get('autostart') === '1';
 
-    apiFetch<{
-      authenticated: boolean;
-      user: UserProfile | null;
-      sessionToken?: string;
-      subscription: SubscriptionInfo | null;
-    }>('/api/auth/session')
-      .then((res) => {
+    const initSession = async () => {
+      try {
+        await Promise.race([
+          auth.authStateReady(),
+          new Promise<void>((resolve) => setTimeout(resolve, 1200)),
+        ]).catch(() => undefined);
+
+        const redirectCred = await getRedirectResult(auth).catch(() => null);
+        if (redirectCred?.user) {
+          const idToken = await redirectCred.user.getIdToken();
+          const fbRes = await apiFetch<{ user: UserProfile; sessionToken?: string }>(
+            '/api/auth/firebase',
+            {
+              method: 'POST',
+              headers: { Authorization: `Bearer ${idToken}` },
+              body: JSON.stringify({ idToken }),
+            }
+          ).catch(() => null);
+          if (fbRes?.sessionToken) {
+            setClientSessionToken(fbRes.sessionToken);
+          }
+        }
+
+        const res = await apiFetch<{
+          authenticated: boolean;
+          user: UserProfile | null;
+          sessionToken?: string;
+          subscription: SubscriptionInfo | null;
+        }>('/api/auth/session');
         if (!active) return;
         if (res.authenticated && res.user) {
           if (res.sessionToken) setClientSessionToken(res.sessionToken);
@@ -49,16 +71,17 @@ export default function App() {
         } else if (autoStart) {
           setAuthScreen('signup');
         }
-      })
-      .catch(() => {
+      } catch {
         if (!active) return;
         if (autoStart) {
           setAuthScreen('signup');
         }
-      })
-      .finally(() => {
+      } finally {
         if (active) setCheckingSession(false);
-      });
+      }
+    };
+
+    initSession();
 
     return () => {
       active = false;
@@ -81,6 +104,8 @@ export default function App() {
   const handleDemoLogin = async () => {
     setCheckingSession(true);
     try {
+      await signOut(auth).catch(() => undefined);
+      setClientSessionToken(null);
       const res = await apiFetch<{ user: UserProfile; sessionToken?: string }>('/api/auth/demo', {
         method: 'POST',
       });

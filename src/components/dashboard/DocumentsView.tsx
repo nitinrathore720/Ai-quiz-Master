@@ -180,15 +180,22 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
   };
 
   const handleSaveDocMetadata = async (docId: number) => {
+    const cleanTitle = editTitle.trim();
+    const cleanSubject = editSubject.trim();
+    const cleanFolder = editFolder.trim() || 'Root';
+    if (!cleanTitle || !cleanSubject) {
+      setError('Document title and subject cannot be empty.');
+      return;
+    }
     setSavingEdit(true);
     setError(null);
     try {
       const res = await apiFetch<{ document: DocumentItem }>(`/api/documents/${docId}`, {
         method: 'PATCH',
         body: JSON.stringify({
-          title: editTitle.trim(),
-          subjectName: editSubject.trim(),
-          folderName: editFolder.trim(),
+          title: cleanTitle,
+          subjectName: cleanSubject,
+          folderName: cleanFolder,
         }),
       });
       setDocs((prev) => prev.map((d) => (d.id === docId ? res.document : d)));
@@ -206,6 +213,12 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
   };
 
   const folders = ['All', ...Array.from(new Set(docs.map((d) => d.folderName || 'Root')))];
+  useEffect(() => {
+    if (selectedFolderFilter !== 'All' && !folders.includes(selectedFolderFilter)) {
+      setSelectedFolderFilter('All');
+    }
+  }, [docs, selectedFolderFilter]);
+
   const filteredDocs =
     selectedFolderFilter === 'All'
       ? docs
@@ -584,9 +597,9 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                     <span>
                       {matchingPages.length} matching page{matchingPages.length === 1 ? '' : 's'}:
                     </span>
-                    {matchingPages.map((mp) => (
+                    {matchingPages.map((mp, idx) => (
                       <button
-                        key={mp.id}
+                        key={mp.id ?? `match-${mp.pageNumber}-${idx}`}
                         type="button"
                         onClick={() => setSelectedPreviewPage(mp.pageNumber)}
                         className="px-2 py-0.5 rounded bg-amber-500/20 text-amber-700 dark:text-amber-300 font-mono cursor-pointer"
@@ -599,9 +612,9 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
 
                 {previewDoc.detectedChapters.length > 0 && (
                   <div className="flex flex-wrap gap-1.5">
-                    {previewDoc.detectedChapters.map((ch) => (
+                    {previewDoc.detectedChapters.map((ch, idx) => (
                       <button
-                        key={ch.id}
+                        key={ch.id || `ch-${ch.startPage}-${idx}`}
                         type="button"
                         onClick={() => setSelectedPreviewPage(ch.startPage)}
                         className="px-2.5 py-1 rounded-lg bg-blue-500/10 text-blue-700 dark:text-blue-300 text-xs font-medium hover:bg-blue-500/20 cursor-pointer"
@@ -613,9 +626,9 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                 )}
 
                 <div className="flex items-center gap-2 overflow-x-auto pb-1">
-                  {previewPages.map((p) => (
+                  {previewPages.map((p, idx) => (
                     <button
-                      key={p.id}
+                      key={p.id ?? `page-${p.pageNumber}-${idx}`}
                       type="button"
                       onClick={() => setSelectedPreviewPage(p.pageNumber)}
                       className={`px-2.5 py-1 rounded-lg text-xs font-mono shrink-0 cursor-pointer ${

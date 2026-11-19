@@ -10,6 +10,7 @@ const __dirname = path.dirname(__filename);
 
 async function startServer(): Promise<void> {
   const app = express();
+  app.set('trust proxy', 1);
   const port = Number(process.env.PORT) || 3000;
   const isProd = process.env.NODE_ENV === 'production';
 
@@ -18,6 +19,10 @@ async function startServer(): Promise<void> {
   app.use(express.urlencoded({ extended: true, limit: '15mb' }));
 
   registerRoutes(app);
+
+  app.all('/api/*', (_req, res) => {
+    res.status(404).json({ error: 'API endpoint not found.' });
+  });
 
   if (!isProd) {
     const { createServer: createViteServer } = await import('vite');

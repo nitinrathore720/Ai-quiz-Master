@@ -66,7 +66,8 @@ export const DEFAULT_PLANS_CONFIG = {
     },
   ],
   features: {
-    ocrEnabled: true,
+    ocrFallbackEnabled: true,
+    strictSourceVerification: true,
     hinglishSupported: true,
     allowSignups: true,
   },
