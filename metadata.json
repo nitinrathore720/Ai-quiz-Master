@@ -1,0 +1,6 @@
+{
+  "name": "AI QUIZ MASTER",
+  "description": "Your Syllabus. Your AI. Your Success. Immersive 3D AI-powered quiz & learning platform generating source-verified quizzes strictly from your uploaded PDFs and study notes.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <script>
+      (function () {
+        try {
+          var desc = Object.getOwnPropertyDescriptor(window, 'fetch');
+          if (desc && desc.get && !desc.set && desc.configurable) {
+            var overrideFetch = null;
+            var origGet = desc.get;
+            Object.defineProperty(window, 'fetch', {
+              configurable: true,
+              enumerable: Boolean(desc.enumerable),
+              get: function () {
+                return overrideFetch || origGet.call(window);
+              },
+              set: function (nextFetch) {
+                if (typeof nextFetch === 'function') {
+                  overrideFetch = nextFetch;
+                }
+              },
+            });
+          }
+        } catch (_e) {}
+
+        window.addEventListener(
+          'error',
+          function (event) {
+            var msg = (event && event.message) || '';
+            var file = (event && event.filename) || '';
+            var stack =
+              (event && event.error && typeof event.error.stack === 'string' && event.error.stack) ||
+              '';
+            var isExtension =
+              file.indexOf('chrome-extension://') === 0 ||
+              file.indexOf('moz-extension://') === 0 ||
+              file.indexOf('safari-extension://') === 0 ||
+              stack.indexOf('chrome-extension://') !== -1 ||
+              stack.indexOf('moz-extension://') !== -1;
+            if (isExtension && msg.indexOf('Cannot set property fetch') !== -1) {
+              event.preventDefault();
+              event.stopImmediatePropagation();
+            }
+          },
+          true
+        );
+      })();
+    </script>
+    <title>AI QUIZ MASTER — Turn Your Syllabus Into Your Personal AI Quiz Master</title>
+    <meta name="description" content="Upload your PDF. Generate unlimited source-verified practice questions strictly from your own study materials. Learn smarter. Score higher." />
+    <meta property="og:title" content="AI QUIZ MASTER — Your Syllabus. Your AI. Your Success." />
+    <meta property="og:description" content="Upload your PDF. Generate unlimited source-verified practice questions strictly from your own study materials." />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400..700;1,9..40,400..700&family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap" rel="stylesheet" />
+  </head>
+  <body class="bg-slate-50 text-slate-900 dark:bg-[#050814] dark:text-slate-100 antialiased selection:bg-blue-500/30 selection:text-blue-200">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+
